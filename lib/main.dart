@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'cities_page.dart';
+import 'city.dart';
+import 'warning.dart';
 
 // entry point of app
 void main() {
@@ -15,6 +18,12 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Weather App',
+      initialRoute: '/',
+      routes: {
+        '/': (context) => const WeatherHomePage(),
+        //'/cities': (context) => CitiesPage(),
+        // Adicionaremos as outras rotas depois
+      },
       theme: ThemeData(
         colorSchemeSeed: Colors.indigo,
         useMaterial3: true,
@@ -25,7 +34,6 @@ class MyApp extends StatelessWidget {
         useMaterial3: true,
         brightness: Brightness.dark,
       ),
-      home: const WeatherHomePage(),
       debugShowCheckedModeBanner: false,
     );
   }
@@ -46,6 +54,7 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
 
   List<City> _cities = [];
   List<Warning> _warnings = [];
+  List<Warning> displayedWarnings = [];
 
   // http requests
   Future<void> fetchCityCodes() async {
@@ -84,7 +93,7 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
   }
 
   Future<void> fetchWeatherWarnings() async {
-    final String url =
+    const String url =
         'https://api.ipma.pt/open-data/forecast/warnings/warnings_www.json';
 
     try {
@@ -100,10 +109,12 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
             warningList.map((json) => Warning.fromJson(json)).toList();
 
         // dar sort alfabeticamente
-        loadedWarnings.sort((a, b) => a.startTime.compareTo(b.startTime));
+        loadedWarnings.sort((a, b) => b.startTime.compareTo(a.startTime));
 
         setState(() {
           _warnings = loadedWarnings;
+          // Limitar a 10 avisos
+          displayedWarnings = loadedWarnings.take(10).toList();
         });
         print(_warnings);
         print(_warningData);
@@ -119,11 +130,14 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
   }
 
   String _getCityName(String areaId) {
-  final city = _cities.firstWhere(
-    (city) => city.areaId == areaId,
-    orElse: () => City(areaId: 'Unknown', globalId: -1, name: 'Unknown'),
-  );
-  return city.name;
+    final city = _cities.firstWhere(
+      (city) => city.areaId == areaId,
+      orElse: () => City(
+          areaId: 'Unknown',
+          globalId: -1,
+          name: 'Localidade Desconhecida (maybe bug)'),
+    );
+    return city.name;
   }
 
   @override
@@ -143,11 +157,11 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
         child: ListView(
           padding: EdgeInsets.zero,
           children: <Widget>[
-            DrawerHeader(
+            const DrawerHeader(
               decoration: BoxDecoration(
                 color: Colors.indigo,
               ),
-              child: const Text(
+              child: Text(
                 'Menu',
                 style: TextStyle(
                   color: Colors.white,
@@ -159,7 +173,21 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
                 leading: const Icon(Icons.location_city),
                 title: const Text('Cidades'),
                 onTap: () {
-                  // AINDA PARA ADICIONAR PAGINA DE CIDADES
+                  // Only navigate if cities are loaded
+                  if (_cities.isNotEmpty) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => CitiesPage(cities: _cities),
+                      ),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                          content:
+                              Text('Aguarde, carregando dados das cidades...')),
+                    );
+                  }
                 }),
             ListTile(
                 leading: const Icon(Icons.warning),
@@ -180,17 +208,18 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            const Text('Warnings'),
+            const Text('Últimos Aviso Meteorológicos',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
             _warnings.isEmpty
                 ? const Text(
                     'Click the button to fetch city data.') // show message if no data is loaded yet
                 : Expanded(
                     // wrap the ListView in an Expanded widget to avoid overflow
                     child: ListView.builder(
-                        itemCount: _warnings.length,
+                        itemCount: displayedWarnings.length,
                         itemBuilder: (context, index) {
                           return Card(
-                            color: _getCardColor(_warnings[index]
+                            color: _getCardColor(displayedWarnings[index]
                                 .awarenessLevel), //sets card color based on warning
                             elevation: 4,
                             margin: const EdgeInsets.symmetric(
@@ -200,13 +229,13 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
                             ),
                             child: ListTile(
                               title: Text(
-                                '${_warnings[index].awarenessTypeName} - ${_getCityName(_warnings[index].areaId)}',
+                                '${displayedWarnings[index].awarenessTypeName} - ${_getCityName(displayedWarnings[index].areaId)}',
                                 style: const TextStyle(
                                     fontWeight: FontWeight.bold,
                                     color: Colors.white),
                               ),
                               subtitle: Text(
-                                'Start Time: ${_warnings[index].startTime} \nEnd Time: ${_warnings[index].endTime}',
+                                'Start Time: ${displayedWarnings[index].startTime} \nEnd Time: ${displayedWarnings[index].endTime}',
                                 style: const TextStyle(color: Colors.white70),
                               ),
                             ),
@@ -216,49 +245,6 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
           ],
         ),
       ),
-    );
-  }
-}
-
-//class para cidades
-class City {
-  final int globalId;
-  final String areaId;
-  final String name;
-
-  City({required this.globalId, required this.areaId, required this.name});
-
-  factory City.fromJson(Map<String, dynamic> json_file) {
-    return City(
-        globalId: json_file['globalIdLocal'],
-        areaId: json_file['idAreaAviso'],
-        name: json_file['local']);
-  }
-}
-
-//class para warnings
-class Warning {
-  final String awarenessTypeName;
-  final String areaId;
-  final String awarenessLevel;
-  final String startTime;
-  final String endTime;
-
-  Warning({
-    required this.awarenessTypeName,
-    required this.areaId,
-    required this.awarenessLevel,
-    required this.startTime,
-    required this.endTime,
-  });
-
-  factory Warning.fromJson(Map<String, dynamic> json_file) {
-    return Warning(
-      awarenessTypeName: json_file['awarenessTypeName'] ?? 'Unknown',
-      areaId: json_file['idAreaAviso'] ?? 'Unknown',
-      awarenessLevel: json_file['awarenessLevelID'] ?? 'Unknown',
-      startTime: json_file['startTime'] ?? 'Unknown',
-      endTime: json_file['endTime'] ?? 'Unknown',
     );
   }
 }
@@ -277,7 +263,6 @@ Color _getCardColor(String awarenessLevel) {
       return Colors.grey[300]!;
   }
 }
-
 
 void debugWarningsParsing(List data) {
   for (var item in data) {
