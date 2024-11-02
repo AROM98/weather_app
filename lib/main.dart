@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'cities_page.dart';
+import 'warnings_page.dart';
 import 'city.dart';
 import 'warning.dart';
+import 'color_utils.dart';
 
 // entry point of app
 void main() {
@@ -47,6 +49,25 @@ class WeatherHomePage extends StatefulWidget {
   _WeatherHomePageState createState() => _WeatherHomePageState();
 }
 
+// fetching (specific) city weather data
+Future<List<Map<String, dynamic>>> fetchWeatherData(String cityCode) async {
+  final String url =
+      'http://api.ipma.pt/open-data/forecast/meteorology/cities/daily/$cityCode.json';
+
+  try {
+    final response = await http.get(Uri.parse(url));
+    if (response.statusCode == 200) {
+      var data = json.decode(response.body);
+      return List<Map<String, dynamic>>.from(data['data']);
+    } else {
+      throw Exception('Failed to load weather data for city $cityCode');
+    }
+  } catch (e) {
+    print('Error fetching weather data: $e');
+    return [];
+  }
+}
+
 class _WeatherHomePageState extends State<WeatherHomePage> {
   // Initial state values
   String _cityData = "Press the button to load city data";
@@ -55,10 +76,11 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
   List<City> _cities = [];
   List<Warning> _warnings = [];
   List<Warning> displayedWarnings = [];
+  List<String> _favoriteCities = [];
 
   // http requests
   Future<void> fetchCityCodes() async {
-    final String url = 'https://api.ipma.pt/open-data/distrits-islands.json';
+    const String url = 'https://api.ipma.pt/open-data/distrits-islands.json';
 
     try {
       final response = await http.get(Uri.parse(url));
@@ -129,6 +151,99 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
     }
   }
 
+  Future<void> fetchWeatherForFavoriteCities() async {
+    for (String cityName in _favoriteCities) {
+      // Get city code based on city name (you should have a way to map name to code)
+      final city = _cities.firstWhere((city) => city.name == cityName,
+          orElse: () => City(name: '', areaId: '', globalId: -1));
+      if (city.globalId != -1) {
+        List<Map<String, dynamic>> weatherData =
+            await fetchWeatherData(city.globalId.toString());
+        // Process and store the weather data as needed
+        print('Weather data for $cityName: $weatherData');
+      }
+    }
+  }
+
+  Widget buildWeatherReports() {
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch, // Full width for all elements
+    children: _favoriteCities.map((cityName) {
+      final city = _cities.firstWhere((city) => city.name == cityName,
+          orElse: () => City(name: '', areaId: '', globalId: -1));
+      if (city.globalId != -1) {
+        return Column(
+          children: [
+            Text(
+              cityName,
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                decoration: TextDecoration.underline,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            FutureBuilder<List<Map<String, dynamic>>>(
+              future: fetchWeatherData(city.globalId.toString()),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return Center(child: CircularProgressIndicator());
+                } else if (snapshot.hasError) {
+                  return Center(child: Text('Error: ${snapshot.error}'));
+                } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                  return Center(
+                      child: Text('No weather data available for $cityName'));
+                } else {
+                  return Column(
+                    children: snapshot.data!.map((weather) {
+                      return Card(
+                        margin: const EdgeInsets.symmetric(vertical: 8),
+                        child: Container(
+                          width: double.infinity, // Ensure card takes full width
+                          padding: const EdgeInsets.all(16.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.center, // Center text
+                            children: [
+                              Text(
+                                'Date: ${weather['forecastDate']}',
+                                style: TextStyle(fontSize: 16),
+                              ),
+                              SizedBox(height: 8),
+                              Text(
+                                'Temp Min: ${weather['tMin']}°C',
+                                style: TextStyle(fontSize: 16),
+                              ),
+                              Text(
+                                'Temp Max: ${weather['tMax']}°C',
+                                style: TextStyle(fontSize: 16),
+                              ),
+                              Text(
+                                'Precipitation: ${weather['precipitaProb']}%',
+                                style: TextStyle(fontSize: 16),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  );
+                }
+              },
+            ),
+          ],
+        );
+      } else {
+        return SizedBox.shrink();
+      }
+    }).toList(),
+  );
+}
+
+
+
+
+
+
   String _getCityName(String areaId) {
     final city = _cities.firstWhere(
       (city) => city.areaId == areaId,
@@ -140,6 +255,12 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
     return city.name;
   }
 
+  void _updateFavoriteCities(List<String> updatedFavorites) {
+    setState(() {
+      _favoriteCities = updatedFavorites;
+    });
+  }
+
   @override
   void initState() {
     super.initState();
@@ -149,9 +270,17 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    List<Warning> filteredWarnings = displayedWarnings.where((warning) {
+      bool isYellowOrRed = warning.awarenessLevel.toLowerCase() == 'yellow' ||
+          warning.awarenessLevel.toLowerCase() == 'red';
+      bool isInFavoriteCities =
+          _favoriteCities.contains(_getCityName(warning.areaId));
+      return isYellowOrRed && isInFavoriteCities;
+    }).toList();
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Weather App'),
+        title: const Text('HomePage'),
       ),
       drawer: Drawer(
         child: ListView(
@@ -178,7 +307,11 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (context) => CitiesPage(cities: _cities),
+                        builder: (context) => CitiesPage(
+                          cities: _cities,
+                          favoriteCities: _favoriteCities,
+                          onFavoritesUpdated: _updateFavoriteCities,
+                        ), // Passed callback here
                       ),
                     );
                   } else {
@@ -193,55 +326,69 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
                 leading: const Icon(Icons.warning),
                 title: const Text('Avisos'),
                 onTap: () {
-                  // AINDA PARA ADICIONAR PAGINA DE AVISOS
-                }),
-            ListTile(
-                leading: const Icon(Icons.favorite),
-                title: const Text('Favoritos'),
-                onTap: () {
-                  // AINDA PARA ADICIONAR PAGINA DE FAVORITOS
+                  // Only navigate if cities are loaded
+                  if (_warnings.isNotEmpty) {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => WarningsPage(
+                          warnings: _warnings, // Pass the list of warnings
+                          cities: _cities, // Pass the list of cities
+                        ),
+                      ),
+                    );
+                  } else {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                          content:
+                              Text('Aguarde, carregando dados dos avisos...')),
+                    );
+                  }
                 }),
           ],
         ),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
-        child: Column(
+        child: ListView(
           children: [
-            const Text('Últimos Aviso Meteorológicos',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-            _warnings.isEmpty
-                ? const Text(
-                    'Click the button to fetch city data.') // show message if no data is loaded yet
-                : Expanded(
-                    // wrap the ListView in an Expanded widget to avoid overflow
-                    child: ListView.builder(
-                        itemCount: displayedWarnings.length,
-                        itemBuilder: (context, index) {
-                          return Card(
-                            color: _getCardColor(displayedWarnings[index]
-                                .awarenessLevel), //sets card color based on warning
-                            elevation: 4,
-                            margin: const EdgeInsets.symmetric(
-                                vertical: 8, horizontal: 4),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10.0),
-                            ),
-                            child: ListTile(
-                              title: Text(
-                                '${displayedWarnings[index].awarenessTypeName} - ${_getCityName(displayedWarnings[index].areaId)}',
-                                style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    color: Colors.white),
-                              ),
-                              subtitle: Text(
-                                'Start Time: ${displayedWarnings[index].startTime} \nEnd Time: ${displayedWarnings[index].endTime}',
-                                style: const TextStyle(color: Colors.white70),
-                              ),
-                            ),
-                          );
-                        }),
+            if (filteredWarnings.isNotEmpty)
+            Center(
+              child: Text(
+                'Avisos Meteorológicos Importantes',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+            ),
+            if (filteredWarnings.isNotEmpty)
+              ...filteredWarnings.map((warning) {
+                return Card(
+                  color: getCardColor(warning.awarenessLevel),
+                  elevation: 4,
+                  margin:
+                      const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10.0),
                   ),
+                  child: ListTile(
+                    title: Text(
+                      '${warning.awarenessTypeName} - ${_getCityName(warning.areaId)}',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                      textAlign: TextAlign.center, // Center the text
+                    ),
+                    subtitle: Text(
+                      'Start Time: ${warning.startTime} \nEnd Time: ${warning.endTime}',
+                      style: const TextStyle(color: Colors.white70),
+                      textAlign: TextAlign.center, // Center the text
+                    ),
+                  ),
+                );
+              }).toList(),
+            const SizedBox(height: 16), // Space before weather reports section
+            if (_favoriteCities.isNotEmpty)
+              buildWeatherReports(), // Include the weather report section here
           ],
         ),
       ),
@@ -249,20 +396,7 @@ class _WeatherHomePageState extends State<WeatherHomePage> {
   }
 }
 
-Color _getCardColor(String awarenessLevel) {
-  switch (awarenessLevel.toLowerCase()) {
-    case 'green':
-      return Colors.green[300]!;
-    case 'yellow':
-      return Colors.yellow[300]!;
-    case 'orange':
-      return Colors.orange[300]!;
-    case 'red':
-      return Colors.red[300]!;
-    default:
-      return Colors.grey[300]!;
-  }
-}
+
 
 void debugWarningsParsing(List data) {
   for (var item in data) {
